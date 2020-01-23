@@ -1,0 +1,137 @@
+---
+title: "Community metrics: SpaDES module"
+author: "Ana Raymundo, Steve Cumming & Tati Micheletti" 
+date: "01 March 2019"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = FALSE, echo = TRUE, eval = FALSE)
+```
+
+# Overview
+
+The **comm_metricsNWT** module computes a series of community metrics based on the bird predictions for the Northwestern Territories (NWT) ('birdsNWT' module).
+
+The computed metrics are:
+
+ * Expected Species Richness*: it is considered as probability of occupancy based on a Poisson distribution. 
+
+ $$ S: 1 - \exp^{\lambda}$$  
+
+ where:  
+
+ $$ exp^{-\lambda} = \frac{exp^{-\lambda}\lambda^k{}{k!} $$
+ 
+ * Shannon diversity Index*: 
+
+ $$ H^' = - \sum_{i=1}^{S} p_ilnp_i $$
+
+where:
+
+$$p_i$$ is the proportion of individuals belonging to the ith species.
+
+ * Simpson diversity Index*: 
+ $$ 1-D = \sum p_i^2 $$
+
+ * Rao's Quadratic Entropy: $$ \sum_{i=1}^{S-1} \sum_{j=i+1}^{S} d_ij* p_i* p_i$$
+
+ Raos Quadratic Entropy incorporates two elements: 1)relative abundances of species and 2)a measure of pairwise functional differences between species [^1]. For this second element, we used *Life history traits* as considered in Knaggs (2018)[^2]. 
+ The life history traits were originally produced by the Avian Life History Information Database Wildspace support system (http://www.on.ec.gc.ca/wildlife/wildspace/project.cfm ) but they are not longer available online. 
+
+
+**References**
+[^1] Botta-Dukát, Z.2005. Rao's quadratic entropy as a measure of functional diversity based on multiple traits. Journal of Vegetation Science 16:533-540. 
+
+[^2] Knagss, M. 2018. Effects of burn severity and time since fire on songbird communities in the northern boreal forest. Department of Renewable Resources. University of Alberta. Master's Thesis. 79 pp.
+
+# Usage
+
+```{r module_usage}
+library("SpaDES")
+library("raster")
+library ("rgdal")
+library ("sp") 
+
+setwd("/mnt/data/Micheletti/NWT/")
+# Source functions in R folder
+invisible(sapply(X = list.files(file.path(getwd(), "R"), full.names = TRUE), FUN = source))
+invisible(sapply(X = list.files(file.path(getwd(), "functions"), full.names = TRUE), FUN = source))
+
+# Set a storage project folder
+setPaths(modulePath = file.path(getwd(), "modules"), cachePath = file.path(getwd(), "cache"),
+         inputPath = file.path(getwd(), "outputs/18JUN19_CS_SCFM/birdPredictions"), 
+         outputPath = file.path(getwd(), "outputs/18JUN19_CS_SCFM/comMetrics"))
+getPaths() # shows where the 4 relevant paths are
+
+times <- list(start = 2100, end = 2100)
+
+parameters <- list(
+  commu_metricsNWT = list(
+     "frequency" = 10
+  )
+  # .progress = list(type = "text", interval = 1), # for a progress bar
+  ## If there are further modules, each can have its own set of parameters:
+# birdsNWT = list(
+#     "baseLayer" = 2005,
+#     "overwritePredictions" = TRUE,
+#     "useTestSpeciesLayers" = TRUE, # Set it to false when you actually have results from LandR_Biomass simulations to run it with
+#     "useParallel" = FALSE, # Using parallel in windows is currently not working.
+#     "predictionInterval" = 1
+#   )
+)
+
+# birdPrediction is a named list
+birdPrediction <- bringObjectTS(path = getPaths()$inputPath, rastersNamePattern = c("predicted", times$start))
+nms <- unlist(lapply(birdPrediction, function(ras){
+  nm <- ras@data@names
+  substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+  nm <- substrRight(x = unlist(strsplit(x = nm, split = paste0("Year", times$start))), n = 4)
+})
+)
+tstep <- if (!is.null(parameters$commu_metricsNWT$predictionInterval)) parameters$commu_metricsNWT$predictionInterval else 1
+
+lastY <- if (times$end != times$start) times$end else NULL
+names(birdPrediction) <- nms
+succTS <- c(seq(times$start, times$end, 
+                by = tstep), lastY)
+outputsCommMet <- data.frame(objectName = rep(c("currentDiversityRasters","diversityByPolygon", 
+                                        "diversityStatistics"), 
+                                      each = length(succTS)),
+                     saveTime = rep(succTS, 
+                                    times = 3))
+.objects <- list(
+  "birdsList" = names(birdPrediction),
+  "birdPrediction" = birdPrediction)
+modules <- list("comm_metricsNWT")
+inputs <- list()
+outputs <- list()
+t1 <- Sys.time()
+comm_metricsNWT <- simInitAndSpades(times = times, params = parameters, modules = modules,
+                                    objects = .objects, loadOrder = c("birdsNWT","comm_metricsNWT"), 
+                                    outputs = outputsCommMet, debug = 2)
+t2 <- Sys.time()
+```
+
+*Simpson:*  
+Simpson's Diversity Index is a measure of diversity which takes into account the number of species present, as well as the relative abundance of each species. As species richness and evenness increase, so diversity increases. The value of D ranges between 0 and 1.
+
+*Shannon:*  
+Interpretation: Typical values are generally between 1.5 and 3.5 in most ecological studies, and the index is rarely greater than 4. The Shannon index increases as both the richness and the evenness of the community increase. 
+
+The input data is the birdPrediction list produce by the module "birdsNWT".
+A list of Life history traits for each bird species (sp_traitsNWT)
+
+This module produces rasters for each diversity metric for the current year. The results can be access by:
+```{r results}
+comm_metricsNWT$currentDiversityRasters
+```
+
+In addition, this module produces a two tables with the mean value for each metric. The results can be access by:
+```{r stats}
+comm_metricsNWT$diversitystats
+comm_metricsNWT$diversityByPolygon
+```
